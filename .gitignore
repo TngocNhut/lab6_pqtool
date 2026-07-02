@@ -1,0 +1,29 @@
+build-*/
+.vscode/
+*.exe
+*.dll
+*.so
+*.a
+*.o
+*.obj
+
+# generated keys and secrets
+artifacts/**/keys/*.pem
+artifacts/**/keys/*.der
+artifacts/**/keys/*.key
+artifacts/**/keys/*.pub
+artifacts/**/signatures/*.sig
+artifacts/**/kem/*.bin
+artifacts/**/kem/*.ss
+artifacts/**/certs/*.json
+artifacts/**/env/*.log
+
+# benchmark logs
+artifacts/**/benchmark/*.log
+artifacts/**/benchmark/tmp_*/
+
+# keep benchmark CSV
+!artifacts/**/benchmark/*.csv
+
+.DS_Store
+Thumbs.db
