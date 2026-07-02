@@ -10,6 +10,7 @@ find_package(OpenSSL REQUIRED)
 add_executable(pqtool
     src/main.cpp
     src/file_utils.cpp
+    src/pq_crypto.cpp
 )
 
 target_include_directories(pqtool PRIVATE include)
