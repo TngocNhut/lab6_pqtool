@@ -46,4 +46,8 @@ void kem_decapsulate(
     const std::string& shared_secret_path
 );
 
+void run_pq_benchmark_csv(
+    const std::string& out_csv
+);
+
 } // namespace pqtool

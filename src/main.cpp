@@ -23,7 +23,8 @@ void print_help() {
         << "  pqtool sign --algo mldsa-44 --priv priv.pem --in msg.bin --out sig.bin\n"
         << "  pqtool verify --algo mldsa-44 --pub pub.pem --in msg.bin --sig sig.bin\n"
         << "  pqtool encaps --algo mlkem-512 --pub pub.pem --ct ct.bin --ss ss.bin\n"
-        << "  pqtool decaps --algo mlkem-512 --priv priv.pem --ct ct.bin --ss ss.bin\n\n"
+        << "  pqtool decaps --algo mlkem-512 --priv priv.pem --ct ct.bin --ss ss.bin\n"
+        << "  pqtool bench --out artifacts/windows/benchmark/bench_pq_windows.csv\n\n"
         << "Supported algorithms:\n"
         << "  mldsa-44\n"
         << "  mldsa-65\n"
@@ -59,6 +60,19 @@ void print_envcheck() {
 
     std::cout << "[OK] Expected PQ algorithms from local check:\n";
     std::cout << "     ML-DSA-44, ML-DSA-65, ML-KEM-512, ML-KEM-768\n";
+}
+
+
+int run_bench(int argc, char* argv[]) {
+    const std::string out = get_arg(argc, argv, "--out");
+
+    if (out.empty()) {
+        std::cerr << "ERROR: bench requires --out benchmark.csv\n";
+        return 1;
+    }
+
+    pqtool::run_pq_benchmark_csv(out);
+    return 0;
 }
 
 int run_keygen(int argc, char* argv[]) {
@@ -195,6 +209,10 @@ int main(int argc, char* argv[]) {
 
         if (command == "decaps") {
             return run_decaps(argc, argv);
+        }
+
+        if (command == "bench") {
+            return run_bench(argc, argv);
         }
 
         std::cerr << "ERROR: unknown command: " << command << "\n";

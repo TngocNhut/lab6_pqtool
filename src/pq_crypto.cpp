@@ -511,3 +511,294 @@ void kem_decapsulate(
 }
 
 } // namespace pqtool
+
+#include <chrono>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+
+namespace pqtool {
+
+namespace {
+
+template <typename Fn>
+double measure_ms_pq_bench(Fn&& fn) {
+    const auto start = std::chrono::steady_clock::now();
+    fn();
+    const auto end = std::chrono::steady_clock::now();
+
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+template <typename Fn>
+void run_quietly_pq_bench(Fn&& fn) {
+    std::ostringstream sink;
+    auto* old_buf = std::cout.rdbuf(sink.rdbuf());
+
+    try {
+        fn();
+    } catch (...) {
+        std::cout.rdbuf(old_buf);
+        throw;
+    }
+
+    std::cout.rdbuf(old_buf);
+}
+
+std::vector<uint8_t> pq_bench_message_bytes() {
+    std::vector<uint8_t> msg(1024);
+
+    for (size_t i = 0; i < msg.size(); ++i) {
+        msg[i] = static_cast<uint8_t>((i * 31) & 0xff);
+    }
+
+    return msg;
+}
+
+void write_csv_row(
+    std::ofstream& out,
+    const std::string& algo,
+    const std::string& operation,
+    size_t iterations,
+    double total_ms,
+    size_t output_size
+) {
+    out << algo << ","
+        << operation << ","
+        << iterations << ","
+        << std::fixed << std::setprecision(6)
+        << total_ms << ","
+        << (total_ms / static_cast<double>(iterations)) << ","
+        << (1000.0 * static_cast<double>(iterations) / total_ms) << ","
+        << output_size << "\n";
+}
+
+} // namespace
+
+void run_pq_benchmark_csv(const std::string& out_csv) {
+    const std::filesystem::path out_path(out_csv);
+
+    if (!out_path.parent_path().empty()) {
+        std::filesystem::create_directories(out_path.parent_path());
+    }
+
+    const std::filesystem::path tmp_dir(
+        out_path.parent_path().string() + "/tmp_pq_bench"
+    );
+
+    std::filesystem::create_directories(tmp_dir);
+
+    const std::filesystem::path msg_path(
+        tmp_dir.string() + "/message_1k.bin"
+    );
+
+    write_binary_file(msg_path.string(), pq_bench_message_bytes());
+
+    std::ofstream out(out_csv);
+    if (!out) {
+        throw std::runtime_error("cannot open benchmark CSV: " + out_csv);
+    }
+
+    out << "algorithm,operation,iterations,total_ms,avg_ms,ops_per_sec,output_size_bytes\n";
+
+    std::cout << "[INFO] PQ benchmark output CSV: " << out_csv << "\n";
+
+    const std::vector<std::string> sig_algos = {
+        "mldsa-44",
+        "mldsa-65"
+    };
+
+    for (const std::string& algo : sig_algos) {
+        const std::filesystem::path pub_path(
+            tmp_dir.string() + "/" + algo + "_pub.pem"
+        );
+
+        const std::filesystem::path priv_path(
+            tmp_dir.string() + "/" + algo + "_priv.pem"
+        );
+
+        const std::filesystem::path sig_path(
+            tmp_dir.string() + "/" + algo + ".sig"
+        );
+
+        const size_t keygen_iters = 50;
+        const size_t sign_iters = 200;
+        const size_t verify_iters = 200;
+
+        const double keygen_total = measure_ms_pq_bench([&]() {
+            run_quietly_pq_bench([&]() {
+                for (size_t i = 0; i < keygen_iters; ++i) {
+                    const std::filesystem::path pub_i(
+                        tmp_dir.string() + "/" + algo + "_pub_" + std::to_string(i) + ".pem"
+                    );
+
+                    const std::filesystem::path priv_i(
+                        tmp_dir.string() + "/" + algo + "_priv_" + std::to_string(i) + ".pem"
+                    );
+
+                    generate_keypair(algo, pub_i.string(), priv_i.string());
+                }
+            });
+        });
+
+        write_csv_row(out, algo, "keygen", keygen_iters, keygen_total, 0);
+
+        std::cout << "[OK] " << algo
+                  << " keygen avg_ms="
+                  << (keygen_total / static_cast<double>(keygen_iters))
+                  << "\n";
+
+        run_quietly_pq_bench([&]() {
+            generate_keypair(algo, pub_path.string(), priv_path.string());
+        });
+
+        const double sign_total = measure_ms_pq_bench([&]() {
+            run_quietly_pq_bench([&]() {
+                for (size_t i = 0; i < sign_iters; ++i) {
+                    sign_file_detached(algo, priv_path.string(), msg_path.string(), sig_path.string());
+                }
+            });
+        });
+
+        const size_t sig_size = std::filesystem::file_size(sig_path);
+
+        write_csv_row(out, algo, "sign", sign_iters, sign_total, sig_size);
+
+        std::cout << "[OK] " << algo
+                  << " sign avg_ms="
+                  << (sign_total / static_cast<double>(sign_iters))
+                  << ", sig_size=" << sig_size
+                  << "\n";
+
+        const double verify_total = measure_ms_pq_bench([&]() {
+            run_quietly_pq_bench([&]() {
+                for (size_t i = 0; i < verify_iters; ++i) {
+                    const bool ok = verify_file_detached(
+                        algo,
+                        pub_path.string(),
+                        msg_path.string(),
+                        sig_path.string()
+                    );
+
+                    if (!ok) {
+                        throw std::runtime_error("benchmark verify failed for " + algo);
+                    }
+                }
+            });
+        });
+
+        write_csv_row(out, algo, "verify", verify_iters, verify_total, sig_size);
+
+        std::cout << "[OK] " << algo
+                  << " verify avg_ms="
+                  << (verify_total / static_cast<double>(verify_iters))
+                  << "\n";
+    }
+
+    const std::vector<std::string> kem_algos = {
+        "mlkem-512",
+        "mlkem-768"
+    };
+
+    for (const std::string& algo : kem_algos) {
+        const std::filesystem::path pub_path(
+            tmp_dir.string() + "/" + algo + "_pub.pem"
+        );
+
+        const std::filesystem::path priv_path(
+            tmp_dir.string() + "/" + algo + "_priv.pem"
+        );
+
+        const std::filesystem::path ct_path(
+            tmp_dir.string() + "/" + algo + "_ct.bin"
+        );
+
+        const std::filesystem::path ss_enc_path(
+            tmp_dir.string() + "/" + algo + "_ss_enc.bin"
+        );
+
+        const std::filesystem::path ss_dec_path(
+            tmp_dir.string() + "/" + algo + "_ss_dec.bin"
+        );
+
+        const size_t keygen_iters = 50;
+        const size_t encaps_iters = 200;
+        const size_t decaps_iters = 200;
+
+        const double keygen_total = measure_ms_pq_bench([&]() {
+            run_quietly_pq_bench([&]() {
+                for (size_t i = 0; i < keygen_iters; ++i) {
+                    const std::filesystem::path pub_i(
+                        tmp_dir.string() + "/" + algo + "_pub_" + std::to_string(i) + ".pem"
+                    );
+
+                    const std::filesystem::path priv_i(
+                        tmp_dir.string() + "/" + algo + "_priv_" + std::to_string(i) + ".pem"
+                    );
+
+                    generate_keypair(algo, pub_i.string(), priv_i.string());
+                }
+            });
+        });
+
+        write_csv_row(out, algo, "keygen", keygen_iters, keygen_total, 0);
+
+        std::cout << "[OK] " << algo
+                  << " keygen avg_ms="
+                  << (keygen_total / static_cast<double>(keygen_iters))
+                  << "\n";
+
+        run_quietly_pq_bench([&]() {
+            generate_keypair(algo, pub_path.string(), priv_path.string());
+        });
+
+        const double encaps_total = measure_ms_pq_bench([&]() {
+            run_quietly_pq_bench([&]() {
+                for (size_t i = 0; i < encaps_iters; ++i) {
+                    kem_encapsulate(
+                        algo,
+                        pub_path.string(),
+                        ct_path.string(),
+                        ss_enc_path.string()
+                    );
+                }
+            });
+        });
+
+        const size_t ct_size = std::filesystem::file_size(ct_path);
+        const size_t ss_size = std::filesystem::file_size(ss_enc_path);
+
+        write_csv_row(out, algo, "encaps", encaps_iters, encaps_total, ct_size);
+
+        std::cout << "[OK] " << algo
+                  << " encaps avg_ms="
+                  << (encaps_total / static_cast<double>(encaps_iters))
+                  << ", ct_size=" << ct_size
+                  << ", ss_size=" << ss_size
+                  << "\n";
+
+        const double decaps_total = measure_ms_pq_bench([&]() {
+            run_quietly_pq_bench([&]() {
+                for (size_t i = 0; i < decaps_iters; ++i) {
+                    kem_decapsulate(
+                        algo,
+                        priv_path.string(),
+                        ct_path.string(),
+                        ss_dec_path.string()
+                    );
+                }
+            });
+        });
+
+        write_csv_row(out, algo, "decaps", decaps_iters, decaps_total, ss_size);
+
+        std::cout << "[OK] " << algo
+                  << " decaps avg_ms="
+                  << (decaps_total / static_cast<double>(decaps_iters))
+                  << "\n";
+    }
+
+    std::cout << "[OK] PQ benchmark completed\n";
+}
+
+} // namespace pqtool
