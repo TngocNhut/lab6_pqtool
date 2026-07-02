@@ -1,8 +1,9 @@
 # Lab 6 — Post-Quantum Signatures & Certificates
 
-Student: Tran Ngoc Nhat
+Họ tên: Trần Ngọc Nhất
+MSSV: 24162086
 
-## Objective
+## Goals
 
 This lab implements a post-quantum cryptography command-line tool for:
 
@@ -22,11 +23,7 @@ Optional extensions:
 - ML-DSA-65
 - ML-KEM-768
 
-## Current checkpoint
-
-This checkpoint builds the project skeleton and checks OpenSSL PQC capabilities.
-
-## Build on Windows MSYS2 UCRT64
+## Chạy lệnh Build trên Windows MSYS2 UCRT64
 
 ```bash
 cmake -S . -B build-windows-ucrt64 -G Ninja -DCMAKE_BUILD_TYPE=Release
