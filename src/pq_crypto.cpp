@@ -802,3 +802,242 @@ void run_pq_benchmark_csv(const std::string& out_csv) {
 }
 
 } // namespace pqtool
+
+#include <openssl/sha.h>
+
+#include <regex>
+
+namespace pqtool {
+
+namespace {
+
+std::string sha256_hex_cert(const std::vector<uint8_t>& data) {
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+
+    SHA256(data.data(), data.size(), digest);
+
+    static const char* hex = "0123456789abcdef";
+    std::string out;
+    out.reserve(SHA256_DIGEST_LENGTH * 2);
+
+    for (unsigned char b : digest) {
+        out.push_back(hex[(b >> 4) & 0x0f]);
+        out.push_back(hex[b & 0x0f]);
+    }
+
+    return out;
+}
+
+std::string json_escape_cert(const std::string& s) {
+    std::string out;
+
+    for (char c : s) {
+        if (c == '\\') {
+            out += "\\\\";
+        } else if (c == '"') {
+            out += "\\\"";
+        } else if (c == '\n') {
+            out += "\\n";
+        } else {
+            out.push_back(c);
+        }
+    }
+
+    return out;
+}
+
+std::string json_get_string_cert(const std::string& json, const std::string& key) {
+    const std::regex re(
+        "\"" + key + "\"\\s*:\\s*\"([^\"]*)\""
+    );
+
+    std::smatch m;
+    if (!std::regex_search(json, m, re)) {
+        throw std::runtime_error("certificate JSON missing field: " + key);
+    }
+
+    return m[1].str();
+}
+
+std::vector<uint8_t> hex_to_bytes_cert(const std::string& hex) {
+    if (hex.size() % 2 != 0) {
+        throw std::runtime_error("invalid hex length");
+    }
+
+    std::vector<uint8_t> out;
+    out.reserve(hex.size() / 2);
+
+    auto val = [](char c) -> int {
+        if (c >= '0' && c <= '9') {
+            return c - '0';
+        }
+
+        if (c >= 'a' && c <= 'f') {
+            return c - 'a' + 10;
+        }
+
+        if (c >= 'A' && c <= 'F') {
+            return c - 'A' + 10;
+        }
+
+        throw std::runtime_error("invalid hex character");
+    };
+
+    for (size_t i = 0; i < hex.size(); i += 2) {
+        out.push_back(static_cast<uint8_t>((val(hex[i]) << 4) | val(hex[i + 1])));
+    }
+
+    return out;
+}
+
+std::string bytes_to_hex_full_cert(const std::vector<uint8_t>& data) {
+    static const char* hex = "0123456789abcdef";
+    std::string out;
+    out.reserve(data.size() * 2);
+
+    for (uint8_t b : data) {
+        out.push_back(hex[(b >> 4) & 0x0f]);
+        out.push_back(hex[b & 0x0f]);
+    }
+
+    return out;
+}
+
+std::string canonical_cert_string(
+    const std::string& subject,
+    const std::string& issuer,
+    const std::string& subject_public_key_sha256,
+    const std::string& signature_algorithm
+) {
+    return
+        "subject=" + subject + "\n" +
+        "issuer=" + issuer + "\n" +
+        "subject_public_key_sha256=" + subject_public_key_sha256 + "\n" +
+        "signature_algorithm=" + signature_algorithm + "\n";
+}
+
+} // namespace
+
+void create_mldsa_certificate(
+    const std::string& subject,
+    const std::string& ca_private_key_path,
+    const std::string& subject_public_key_path,
+    const std::string& cert_json_path
+) {
+    const std::string issuer = "Lab6-Mini-MLDSA-CA";
+    const std::string signature_algorithm = "mldsa-44";
+
+    const std::vector<uint8_t> subject_pub = read_binary_file(subject_public_key_path);
+    const std::string pub_sha256 = sha256_hex_cert(subject_pub);
+
+    const std::string canonical = canonical_cert_string(
+        subject,
+        issuer,
+        pub_sha256,
+        signature_algorithm
+    );
+
+    const std::filesystem::path cert_path(cert_json_path);
+    if (!cert_path.parent_path().empty()) {
+        std::filesystem::create_directories(cert_path.parent_path());
+    }
+
+    const std::filesystem::path canonical_path =
+        cert_path.parent_path() / "cert_canonical_to_be_signed.txt";
+
+    const std::filesystem::path sig_path =
+        cert_path.parent_path() / "cert_signature_mldsa44.sig";
+
+    write_text_file(canonical_path.string(), canonical);
+
+    sign_file_detached(
+        signature_algorithm,
+        ca_private_key_path,
+        canonical_path.string(),
+        sig_path.string()
+    );
+
+    const std::vector<uint8_t> signature = read_binary_file(sig_path.string());
+    const std::string sig_hex = bytes_to_hex_full_cert(signature);
+
+    const std::string json =
+        "{\n"
+        "  \"type\": \"Lab6MiniMLDSACertificate\",\n"
+        "  \"subject\": \"" + json_escape_cert(subject) + "\",\n"
+        "  \"issuer\": \"" + json_escape_cert(issuer) + "\",\n"
+        "  \"subject_public_key_file\": \"" + json_escape_cert(subject_public_key_path) + "\",\n"
+        "  \"subject_public_key_sha256\": \"" + pub_sha256 + "\",\n"
+        "  \"signature_algorithm\": \"" + signature_algorithm + "\",\n"
+        "  \"signature_hex\": \"" + sig_hex + "\"\n"
+        "}\n";
+
+    write_text_file(cert_json_path, json);
+
+    std::cout << "[OK] Mini ML-DSA certificate created\n";
+    std::cout << "[OK] Subject: " << subject << "\n";
+    std::cout << "[OK] Issuer: " << issuer << "\n";
+    std::cout << "[OK] Subject public key: " << subject_public_key_path << "\n";
+    std::cout << "[OK] Subject public key SHA-256: " << pub_sha256 << "\n";
+    std::cout << "[OK] CA private key: " << ca_private_key_path << "\n";
+    std::cout << "[OK] Certificate JSON: " << cert_json_path << "\n";
+    std::cout << "[OK] Signature size: " << signature.size() << " bytes\n";
+}
+
+bool verify_mldsa_certificate(
+    const std::string& ca_public_key_path,
+    const std::string& cert_json_path
+) {
+    const std::vector<uint8_t> json_bytes = read_binary_file(cert_json_path);
+    const std::string json(json_bytes.begin(), json_bytes.end());
+
+    const std::string subject = json_get_string_cert(json, "subject");
+    const std::string issuer = json_get_string_cert(json, "issuer");
+    const std::string pub_sha256 = json_get_string_cert(json, "subject_public_key_sha256");
+    const std::string signature_algorithm = json_get_string_cert(json, "signature_algorithm");
+    const std::string signature_hex = json_get_string_cert(json, "signature_hex");
+
+    if (signature_algorithm != "mldsa-44") {
+        throw std::runtime_error("unsupported certificate signature algorithm: " + signature_algorithm);
+    }
+
+    const std::string canonical = canonical_cert_string(
+        subject,
+        issuer,
+        pub_sha256,
+        signature_algorithm
+    );
+
+    const std::filesystem::path cert_path(cert_json_path);
+    const std::filesystem::path canonical_path =
+        cert_path.parent_path() / "cert_verify_canonical.txt";
+
+    const std::filesystem::path sig_path =
+        cert_path.parent_path() / "cert_verify_signature.sig";
+
+    write_text_file(canonical_path.string(), canonical);
+    write_binary_file(sig_path.string(), hex_to_bytes_cert(signature_hex));
+
+    const bool ok = verify_file_detached(
+        signature_algorithm,
+        ca_public_key_path,
+        canonical_path.string(),
+        sig_path.string()
+    );
+
+    if (ok) {
+        std::cout << "[OK] Mini ML-DSA certificate verification succeeded\n";
+        std::cout << "[OK] Certificate JSON: " << cert_json_path << "\n";
+        std::cout << "[OK] CA public key: " << ca_public_key_path << "\n";
+        std::cout << "[OK] Subject: " << subject << "\n";
+        std::cout << "[OK] Issuer: " << issuer << "\n";
+        std::cout << "[OK] Subject public key SHA-256: " << pub_sha256 << "\n";
+        return true;
+    }
+
+    std::cout << "[FAIL] Mini ML-DSA certificate verification failed\n";
+    std::cout << "[INFO] Certificate JSON: " << cert_json_path << "\n";
+    std::cout << "[INFO] CA public key: " << ca_public_key_path << "\n";
+    return false;
+}
+
+} // namespace pqtool

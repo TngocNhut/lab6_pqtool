@@ -50,4 +50,16 @@ void run_pq_benchmark_csv(
     const std::string& out_csv
 );
 
+void create_mldsa_certificate(
+    const std::string& subject,
+    const std::string& ca_private_key_path,
+    const std::string& subject_public_key_path,
+    const std::string& cert_json_path
+);
+
+bool verify_mldsa_certificate(
+    const std::string& ca_public_key_path,
+    const std::string& cert_json_path
+);
+
 } // namespace pqtool

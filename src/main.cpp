@@ -24,7 +24,9 @@ void print_help() {
         << "  pqtool verify --algo mldsa-44 --pub pub.pem --in msg.bin --sig sig.bin\n"
         << "  pqtool encaps --algo mlkem-512 --pub pub.pem --ct ct.bin --ss ss.bin\n"
         << "  pqtool decaps --algo mlkem-512 --priv priv.pem --ct ct.bin --ss ss.bin\n"
-        << "  pqtool bench --out artifacts/windows/benchmark/bench_pq_windows.csv\n\n"
+        << "  pqtool bench --out artifacts/windows/benchmark/bench_pq_windows.csv\n"
+        << "  pqtool cert-create --subject NAME --ca-priv ca_priv.pem --subject-pub subject_pub.pem --out cert.json\n"
+        << "  pqtool cert-verify --ca-pub ca_pub.pem --cert cert.json\n\n"
         << "Supported algorithms:\n"
         << "  mldsa-44\n"
         << "  mldsa-65\n"
@@ -62,6 +64,35 @@ void print_envcheck() {
     std::cout << "     ML-DSA-44, ML-DSA-65, ML-KEM-512, ML-KEM-768\n";
 }
 
+
+
+int run_cert_create(int argc, char* argv[]) {
+    const std::string subject = get_arg(argc, argv, "--subject");
+    const std::string ca_priv = get_arg(argc, argv, "--ca-priv");
+    const std::string subject_pub = get_arg(argc, argv, "--subject-pub");
+    const std::string out = get_arg(argc, argv, "--out");
+
+    if (subject.empty() || ca_priv.empty() || subject_pub.empty() || out.empty()) {
+        std::cerr << "ERROR: cert-create requires --subject NAME --ca-priv ca_priv.pem --subject-pub subject_pub.pem --out cert.json\n";
+        return 1;
+    }
+
+    pqtool::create_mldsa_certificate(subject, ca_priv, subject_pub, out);
+    return 0;
+}
+
+int run_cert_verify(int argc, char* argv[]) {
+    const std::string ca_pub = get_arg(argc, argv, "--ca-pub");
+    const std::string cert = get_arg(argc, argv, "--cert");
+
+    if (ca_pub.empty() || cert.empty()) {
+        std::cerr << "ERROR: cert-verify requires --ca-pub ca_pub.pem --cert cert.json\n";
+        return 1;
+    }
+
+    const bool ok = pqtool::verify_mldsa_certificate(ca_pub, cert);
+    return ok ? 0 : 1;
+}
 
 int run_bench(int argc, char* argv[]) {
     const std::string out = get_arg(argc, argv, "--out");
@@ -213,6 +244,14 @@ int main(int argc, char* argv[]) {
 
         if (command == "bench") {
             return run_bench(argc, argv);
+        }
+
+        if (command == "cert-create") {
+            return run_cert_create(argc, argv);
+        }
+
+        if (command == "cert-verify") {
+            return run_cert_verify(argc, argv);
         }
 
         std::cerr << "ERROR: unknown command: " << command << "\n";
